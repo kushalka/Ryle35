@@ -1,0 +1,26 @@
+.tgcloud/
+node_modules/
+tokens.txt
+.env
+secrets.*
+_backup/
+tgcloud/lib/keys.js
+
+# local work files (not part of the repo)
+booru_tokens.json
+.cred-server.js
+proxy-preload.cjs
+_fill_db.*
+_getkeys.py
+_makekeys.py
+_sankaku_keys.py
+holo_results.json
+holo_tasks.json
+holo_seq.py
+botgg_import.py
+_sk_export.js
+local-socks-bridge.mjs
+docs/local-setup.md
+__pycache__/
+.zcode/
+.zcodeignore
