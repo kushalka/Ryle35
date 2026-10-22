@@ -15,18 +15,23 @@ export const posts = table('posts', {
   fileId:    text('file_id'),             // file_id в канале-дампе — кэш-выдача без лимитов URL
   fileKind:  text('file_kind'),           // anim | video | dead (dead = файл недоступен, не ретраим)
   hits:      integer('hits').notNull().default(0), // сколько раз выбрали в инлайне
-  createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`(unixepoch())`),
+  // никто не читает — только издержка на каждую вставку
+  createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`(unixepoch())`)
+    .deprecated('never read, insert overhead only'),
 }, (t) => ({
   uq:      uniqueIndex('uidx_posts_site_remote').on(t.site, t.remoteId),
   hitsIdx: index('idx_posts_hits').on(t.hits),
   md5Idx:  index('idx_posts_md5').on(t.md5),
+  // Порядок выдачи поиска (searchPosts): пустой запрос идёт по готовому порядку
+  // индекса (обратный проход) и останавливается на LIMIT — без сортировки всей таблицы.
+  rankIdx: index('idx_posts_rank').on(sql`(${t.fileId} is not null)`, t.hits, t.id),
 }));
 
-// Популярность тега = сколько раз отправили пост с этим тегом.
+// Счётчик популярности тегов — write-only, на удаление (поиск сортирует по posts.hits).
 export const tags = table('tags', {
   name: text('name').primaryKey(), // нормализованный тег, lowercase
   hits: integer('hits').notNull().default(0),
-});
+}).deprecated('write-only, ни одного читателя — поиск сортирует по posts.hits');
 
 // Связь пост ↔ тег. FK нет — целостность держит код (lib/booru.js).
 export const postTags = table('post_tags', {
@@ -45,7 +50,10 @@ export const crawlQueue = table('crawl_queue', {
   lastAt:   integer('last_at', { mode: 'timestamp' }),
   addedAt:  integer('added_at', { mode: 'timestamp' }).default(sql`(unixepoch())`),
 }, (t) => ({
-  nextIdx: index('idx_crawl_queue_next').on(t.priority, t.lastAt),
+  // nextTag сортирует выражением (priority − возраст) — индекс по голым колонкам
+  // планировщик не использует, чистые накладные расходы на запись.
+  nextIdx: index('idx_crawl_queue_next').on(t.priority, t.lastAt)
+    .deprecated('nextTag orders by (priority - age) expression, unusable by planner'),
 }));
 
 // Персонализацию откатили (2026-10-10, владелец: «пусть всё общее») — таблицы на удаление.
@@ -66,4 +74,37 @@ export const userSeen = table('user_seen', {
 export const crawlState = table('crawl_state', {
   site:   text('site').primaryKey(),      // хост из SITES или '_tick' (глобальный тик)
   lastAt: integer('last_at', { mode: 'timestamp' }).default(sql`(unixepoch())`),
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Семантический индекс (RU-запросы → EN-теги). Отдельные таблицы, оригинальные
+// данные не трогаются. Сборка: _index_build/build_index.py, модель — lib/embed.js.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Вектор тега: base64 int8[512], единичная норма. n — частота тега в post_tags,
+// по ней читается top-K для сравнения (ORDER BY n DESC LIMIT K — по idx_tag_vec_n).
+export const tagVec = table('tag_vec', {
+  tag: text('tag').primaryKey(),
+  n:   integer('n').notNull().default(0),
+  v:   text('v').notNull(),
+}, (t) => ({
+  nIdx: index('idx_tag_vec_n').on(t.n),
+}));
+
+// Кэш перевода запроса в теги — чтобы один и тот же текст не эмбеддился повторно
+// (TTL 30 с, как cache_time инлайна).
+export const ruQcache = table('ru_qcache', {
+  q:    text('q').primaryKey(),
+  tags: text('tags').notNull(),   // JSON-массив английских тегов
+  src:  text('src'),              // lexical | embed
+  at:   integer('at').notNull(),  // ms, Date.now()
+}, (t) => ({
+  atIdx: index('idx_ru_qcache_at').on(t.at),
+}));
+
+// Дебаунс инлайна: последний запрос пользователя — 500 мс покоя до отправки в модель.
+export const inlineSeen = table('inline_seen', {
+  userId: integer('user_id').primaryKey(),
+  q:      text('q').notNull(),
+  at:     integer('at').notNull(), // ms, Date.now()
 });

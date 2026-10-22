@@ -1,9 +1,10 @@
 // lib/booru.js — поиск постов по тегам, популярность, сборка инлайн-результатов.
-// Схема: posts (посты), post_tags (тег ↔ пост), tags (счётчик популярности тега).
+// Схема: posts (посты), post_tags (тег ↔ пост).
 
 import { db } from 'sdk';
 
 const PAGE = 20; // Telegram показывает до 50, берём с запасом меньше
+export { PAGE };
 
 // 'Cat, dog_ears wolf' → ['cat', 'dog_ears', 'wolf']
 export function parseTags(text) {
@@ -26,12 +27,15 @@ export const ALIASES = {
 
 // webm/zip в инлайне не проигрываются — отсеиваем ещё в SQL, иначе страница
 // может состоять из одних webm и вернуться пустой после фильтрации.
-// Лимиты Bot API на файлы по ссылке: mp4 >20 МБ и gif >8 МБ ТГ молча выкидывает —
-// не тратим на них слоты. NULL-размер (старые строки) пропускаем: покажутся как
-// video-карточка либо отсеются ТГ; размеры добираются при ротации страниц.
-const PLAYABLE = `(p.file_ext IN ('jpg','jpeg','png','webp')
+// Лимиты Bot API на файлы по ссылке: фото ≤5 МБ (крупный файл валит весь
+// answerInlineQuery с 400 — пользователь видит ноль результатов), mp4 >20 МБ и
+// gif >8 МБ ТГ молча выкидывает — не тратим на них слоты. Пост с file_id ТГ
+// (filetick) отдаётся из кэша — лимит URL на него не действует (у фото file_id
+// нет). NULL-размер (старые строки) пропускаем: покажутся как video-карточка
+// либо отсеются ТГ; размеры добираются при ротации страниц.
+const PLAYABLE = `((p.file_ext IN ('jpg','jpeg','png','webp') AND (p.file_size IS NULL OR p.file_size <= 5000000))
   OR (p.file_ext = 'gif' AND (p.file_size IS NULL OR p.file_size <= 8000000))
-  OR (p.file_ext = 'mp4' AND (p.file_size IS NULL OR p.file_size <= 20000000)))`;
+  OR (p.file_ext = 'mp4' AND ((p.file_id IS NOT NULL AND p.file_kind IN ('video','anim')) OR p.file_size IS NULL OR p.file_size <= 20000000)))`;
 
 // Мёртвые файлы (filetick не смог отдать) — мимо: тап в них даёт пустое сообщение.
 // Кэш ТГ (file_id) первым: играет мгновенно и вне лимитов URL (касается mp4 —
@@ -87,7 +91,8 @@ export async function knownTags(words) {
 // есть в индексе. Склейка заменяет пару слов — это главная опечатка новичка; есть
 // оба написания — один слот-альтернатива (ИЛИ), а не два И-условия. Слоты = массивы.
 // Минус-слово клеится только с минус-словом, знак сохраняется в слоте.
-async function glueWords(words) {
+// (экспортируется и для хендлера инлайна: склейка ДО правки опечаток, см. inline_query.js)
+export async function glueWords(words) {
   const out = [];
   for (let i = 0; i < words.length; i++) {
     const neg = words[i].startsWith('-');
@@ -152,53 +157,108 @@ function titleOf(p) {
   return (p.width && p.height ? `${p.width}×${p.height} · ` : '') + p.site;
 }
 
+// Упаковка строк posts в инлайн-результаты с кнопкой «Поиск» (как в buildResults).
+export function rowsToResults(rows, buttonText) {
+  const label = buttonText ?? '';
+  const keyboard = {
+    reply_markup: {
+      inline_keyboard: [[{ text: 'Поиск', switch_inline_query_current_chat: label }]],
+    },
+  };
+  return rows.slice(0, PAGE).map(postToResult).filter(Boolean).map((r) => ({ ...r, ...keyboard }));
+}
+
+// next_offset со слотами («20:a|b c»), если влезает в лимит 64 байта (UTF-8);
+// не влезает — голый offset, слоты на стр. 2 просто не повторятся.
+export function carryOffset(nextOffset, slots) {
+  const carry = `${nextOffset}:${slots.map((s) => s.join('|')).join(' ')}`;
+  let bytes = 0; // UTF-8: кириллица в запросе ест по 2 байта на букву
+  for (const ch of carry) { const c = ch.codePointAt(0); bytes += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4; }
+  return bytes <= 64 ? carry : String(nextOffset);
+}
+
+// Трёхслойная выдача (первая страница приоритетного поиска):
+//   ядро       — И по всем переведённым тегам (точное соответствие запросу);
+//   частичный  — популярные посты с главным тегом среди прочих — когда И-ядро
+//                не покрыло страницу и ядро состоит из 2+ тегов (при одном теге
+//                ядро и есть «среди прочих»);
+//   семантика  — ИЛИ по соседним тегам эмбед-модели + главный тег: популярное
+//                по теме подмешивается к семантике, а не заменяет её (выдача
+//                ИЛИ-поиска уже отсортирована по hits).
+// Слои не дублируются (по id поста), лимит rows_read — ≤3 запроса по LIMIT PAGE+1.
+// maxOr — максимум тегов в ИЛИ-слоте (RU_MAX_OR хендлера).
+export async function layeredResults(coreTags, semTags, maxOr) {
+  const core = coreTags ?? [];
+  const picked = [];
+  const seen = new Set();
+  const take = (rows) => {
+    for (const r of rows || []) {
+      if (picked.length >= PAGE) return;
+      if (!seen.has(r.id)) { seen.add(r.id); picked.push(r); }
+    }
+  };
+  if (core.length) {
+    take(await searchPosts(core.map((t) => [t]), PAGE + 1, 0)); // ядро: И
+    if (picked.length < PAGE && core.length > 1) {
+      take(await searchPosts([[core[0]]], PAGE + 1, 0)); // частичный слой
+    }
+  }
+  if (picked.length < PAGE) {
+    const orSet = [...new Set([core[0], ...(semTags ?? [])].filter(Boolean))].slice(0, maxOr);
+    if (orSet.length) take(await searchPosts([orSet], PAGE + 1, 0)); // семантика + популярное по теме
+  }
+  return picked;
+}
+
 // Что ответить на инлайн-запрос: { results, next_offset?, searched? }
-// searched — слоты после склейки (плоский список тегов): хендлер сеет в очередь
-// ровно то, что искал, иначе обещание заглушки «добавляю в базу» может не сбыться.
-export async function buildResults(queryText, offsetStr) {
-  const slots = await glueWords(parseTags(queryText));
+// slots — ИЛИ-слоты после склейки (массив массивов, элементы могут нести '-');
+// текст сюда НЕ пере-парсим, иначе альтернативы слота («2_girls|2girls»)
+// превратились бы из одного ИЛИ в два И-слова. searched — плоский список тегов:
+// хендлер сеет в очередь ровно то, что искал, иначе обещание заглушки
+// «добавляю в базу» может не сбыться. buttonText — текст кнопки «Поиск»
+// и заглушки (исправленный запрос); нет — собираем из слотов.
+export async function buildResults(slots, offsetStr, buttonText) {
   const searched = [...new Set(slots.flat())];
   const offset = Math.max(0, parseInt(offsetStr || '0', 10) || 0);
   const rows = await searchPosts(slots, PAGE + 1, offset);
   const more = rows.length > PAGE;
+  const label = buttonText ?? searched.join(' ');
   // Кнопка «Поиск» под отправленным постом: снова открывает инлайн-поле
   // с тем же запросом — можно поправить теги и поискать заново.
-  const keyboard = {
-    reply_markup: {
-      inline_keyboard: [[{ text: 'Поиск', switch_inline_query_current_chat: queryText ?? '' }]],
-    },
-  };
-  const results = rows.slice(0, PAGE).map(postToResult).filter(Boolean).map((r) => ({ ...r, ...keyboard }));
+  const results = rowsToResults(rows, label);
   // Пусто на первой странице: вместо тишины одна заглушка-статья — клик отправит
   // её текст в чат; спрос тем временем сеется в очередь (handlers/inline_query.js).
   // Только первая страница: пустой хвост пагинации — не «тега нет в базе».
-  if (offset === 0 && !results.length && (queryText ?? '').trim()) {
-    const title = `Добавляю «${queryText}» в базу`;
+  if (offset === 0 && !results.length && searched.length) {
+    const title = `Добавляю «${label}» в базу`;
     return {
       searched,
       results: [{
         type: 'article', id: 'stub', title,
         description: 'Такого тега пока нет — нажми и приходи позже',
         input_message_content: { message_text: `${title}, приходи позже` },
-        ...keyboard,
+        reply_markup: {
+          inline_keyboard: [[{ text: 'Поиск', switch_inline_query_current_chat: label }]],
+        },
       }],
     };
   }
-  return { searched, results, ...(more ? { next_offset: String(offset + PAGE) } : {}) };
+  if (!more) return { searched, results };
+  // Слоты едут в next_offset («20:2_girls|2girls senko», '|' — альтернативы одного
+  // ИЛИ-слота): ТГ присылает стр. 2 с ИСХОДНЫМ текстом, без этого и слоты-альтернативы,
+  // и исправление опечатки на стр. 2 теряются.
+  return { searched, results, next_offset: carryOffset(offset + PAGE, slots) };
+}
+
+// Текстовый путь (dev-эндпоинт и тесты): распарсить и склеить текст, дальше — buildResults.
+export async function buildFromQuery(queryText, offsetStr) {
+  const slots = await glueWords(parseTags(queryText));
+  return buildResults(slots, offsetStr, queryText);
 }
 
 // +1 к популярности поста (когда пользователь выбрал результат).
 export async function bumpPost(postId) {
   await db.run('UPDATE posts SET hits = hits + 1 WHERE id = :id', { ':id': postId });
-}
-
-// +1 к популярности всех тегов выбранного поста.
-export async function bumpPostTags(postId) {
-  await db.run(
-    `INSERT INTO tags(name, hits) SELECT tag, 1 FROM post_tags WHERE post_id = :id
-     ON CONFLICT(name) DO UPDATE SET hits = hits + 1`,
-    { ':id': postId },
-  );
 }
 
 // Для крауллера: добавить/обновить пост, привязать теги.
@@ -214,37 +274,29 @@ export async function upsertPost({ site, remoteId, fileUrl, thumbUrl, fileExt, w
     );
     if (twin) return { id: twin.id, dup: true };
   }
-  const upd = await db.run(
-    `UPDATE posts SET file_url = :fu, thumb_url = :tu, file_ext = :ext, width = :w, height = :h,
-     file_size = COALESCE(:fs, file_size), md5 = COALESCE(:mh, md5)
-     WHERE site = :site AND remote_id = :rid`,
+  // Один upsert вместо update→insert→select; RETURNING отдаёт id в обеих ветках
+  // (raw-запрос — docs «Raw SQL»: db.run(... RETURNING id) возвращает rows).
+  // COALESCE: известный размер/хэш не затираем NULL'ом.
+  const { rows } = await db.run(
+    `INSERT INTO posts(site, remote_id, file_url, thumb_url, file_ext, width, height, file_size, md5)
+     VALUES (:site, :rid, :fu, :tu, :ext, :w, :h, :fs, :mh)
+     ON CONFLICT(site, remote_id) DO UPDATE SET
+       file_url = excluded.file_url, thumb_url = excluded.thumb_url, file_ext = excluded.file_ext,
+       width = excluded.width, height = excluded.height,
+       file_size = COALESCE(excluded.file_size, posts.file_size), md5 = COALESCE(excluded.md5, posts.md5)
+     RETURNING id`,
     {
       ':site': site, ':rid': String(remoteId), ':fu': fileUrl,
       ':tu': thumbUrl ?? null, ':ext': fileExt, ':w': width ?? null, ':h': height ?? null,
       ':fs': size ?? null, ':mh': h,
     },
   );
-  if (!upd.rowsAffected) {
-    await db.run(
-      `INSERT INTO posts(site, remote_id, file_url, thumb_url, file_ext, width, height, file_size, md5)
-       VALUES (:site, :rid, :fu, :tu, :ext, :w, :h, :fs, :mh)
-       ON CONFLICT(site, remote_id) DO NOTHING`,
-      {
-        ':site': site, ':rid': String(remoteId), ':fu': fileUrl,
-        ':tu': thumbUrl ?? null, ':ext': fileExt, ':w': width ?? null, ':h': height ?? null,
-        ':fs': size ?? null, ':mh': h,
-      },
-    );
-  }
-  const row = await db.get(
-    'SELECT id FROM posts WHERE site = :site AND remote_id = :rid',
-    { ':site': site, ':rid': String(remoteId) },
-  );
-  if (!row || !clean.length) return { id: row?.id, dup: false };
+  const id = rows[0]?.id;
+  if (id == null || !clean.length) return { id, dup: false };
   const placeholders = clean.map((t, i) => `(:id, :tag${i})`).join(',');
   await db.run(
     `INSERT INTO post_tags(post_id, tag) VALUES ${placeholders} ON CONFLICT DO NOTHING`,
-    { ':id': row.id, ...Object.fromEntries(clean.map((t, i) => [`:tag${i}`, t])) },
+    { ':id': id, ...Object.fromEntries(clean.map((t, i) => [`:tag${i}`, t])) },
   );
-  return { id: row.id, dup: false };
+  return { id, dup: false };
 }

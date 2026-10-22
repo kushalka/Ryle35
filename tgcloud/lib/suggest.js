@@ -138,7 +138,8 @@ export async function suggestWord(word) {
 }
 
 // Теги запроса → { search: исправленные для поиска, seed: что сеять, changed }.
-// Слова короче 3 символов — печатающийся мусор: из правки и сеяния выбрасываем.
+// Слова короче 3 символов — печатающийся мусор: не правим и не сеем, но в поиске
+// оставляем как есть («2 girls» ищет оба слова, а не одно).
 // known — слова, уже есть в индексе: проходят как есть, без запросов к сайтам.
 // Минус-тег: правим слово без знака, знак возвращаем в поиск; в сеяние минус-слова
 // не идём — пользователь его исключить просил, качать его не надо.
@@ -149,11 +150,11 @@ export async function correctTags(tags, known = new Set()) {
   if (!words.length) return { search: tags, seed: tags.filter((t) => !t.startsWith('-')), changed: false };
   const out = await Promise.all(words.map(([t]) => suggestWord(t)));
   const fix = new Map(words.map(([t], i) => [t, out[i].fix]));
-  const keep = bare.map((_, i) => i).filter((i) => bare[i].length >= 3);
-  const search = keep.map((i) => (neg[i] ? '-' : '') + (fix.get(bare[i]) ?? bare[i]));
+  // В поиске все токены (короткие — без правки), фильтр ≥3 — только кандидаты правки и сеяние.
+  const search = bare.map((t, i) => (neg[i] ? '-' : '') + (fix.get(t) ?? t));
   return {
     search,
     seed: [...new Set(words.flatMap(([, n], i) => (n ? [] : [out[i].fix, ...(out[i].alias ? [out[i].alias] : [])])))],
-    changed: search.some((t, i) => t !== tags[keep[i]]),
+    changed: search.some((t, i) => t !== tags[i]),
   };
 }
