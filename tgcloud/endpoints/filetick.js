@@ -20,8 +20,9 @@ async function bodyBytes(res) {
   const parts = [];
   let n = 0;
   for await (const chunk of res.body) {
-    parts.push(chunk);
     n += chunk.length;
+    if (n > MAX_BYTES) throw new Error(`too big by stream: ${n}`); // chunked без content-length
+    parts.push(chunk);
   }
   const out = new Uint8Array(n);
   let off = 0;
@@ -69,7 +70,8 @@ export default async function fileTick() {
         msg = await api.sendVideo({ chat_id: DUMP_CHAT_ID, video: mkFile() }); // не анимация (кодек/формат) — хотя бы карточка
         kind = 'video';
       }
-      const fid = msg?.animation?.file_id ?? msg?.document?.file_id ?? msg?.video?.file_id;
+      // sendAnimation отвечает .animation, sendVideo — .video; document тут не бывает
+      const fid = msg?.animation?.file_id ?? msg?.video?.file_id;
       if (!fid) throw new Error('no file_id in response');
       await db.run(
         'UPDATE posts SET file_id = :f, file_kind = :k WHERE id = :id',
