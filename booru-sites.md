@@ -134,20 +134,20 @@ AI-контент не индексируется (владелец, 2026-10-10)
 | mspabooru.com | dapiXml | konachan.com / .net | moebooru |
 | yande.re | moebooru | sakugabooru.com | moebooru |
 
-**rule34.world** — не gelbooru: свой Angular-SPA API. Поиск `POST https://rule34.world/api/v2/post/search/root` с телом `{"includeTags":["1girl"],"take":100}` (+ `cursor` из ответа для следующих страниц, сервер берёт максимум 3 тега, неизвестные теги молча игнорирует). Элементы выдачи без тегов и ссылок — только id/width/height/type (0=картинка, 1=видео); ссылки собираются по шаблону CDN `https://rule34storage.b-cdn.net/posts/<id>/1000/<id>.pic.jpg` (картинка), `.pic256.jpg` (превью), `.mov.mp4` (видео). Типы файлов из кода фронта: Pic=10, PicThumbnail=11, Mov=100, Mov720=113 и т.д. Теги постов = теги запроса (как wallhaven).
+**rule34.world** — не gelbooru: свой Angular-SPA API. Поиск `POST https://rule34.world/api/v2/post/search/root` с телом `{"includeTags":["1girl"],"take":100}` (+ `cursor` из ответа для следующих страниц, курсор — **строка**, числом API отвечает 400; сервер берёт максимум 3 тега, неизвестные теги молча игнорирует). Элементы выдачи без тегов и ссылок — только id/width/height/type (0=картинка, 1=видео); ссылки собираются по шаблону CDN `https://rule34storage.b-cdn.net/posts/<id/1000 целым>/<id>/<id>.pic.jpg` (картинка), `.pic256.jpg` (превью), `.mov.mp4` (видео; его миниатюра — `.mov256.mp4`). ⚠️ 2026-10-10 вечер: прежний шаблон `/posts/<id>/1000/<id>...` (число 1000 в пути) умер — все 2485 постов в БД с мёртвыми URL; Типы файлов из кода фронта: Pic=10, PicThumbnail=11, Mov=100, Mov720=113 и т.д. Теги постов = теги запроса (как wallhaven); полные теги отдаёт только одиночный `GET /api/v2/post/<id>` (он же — эхо-проверка), размера файла нет нигде (доступен только HEAD'ом по CDN-URL).
 
 **Особенности поиска 2026-10-10:** konachan.com не ищет по тегам с цифры в начале (`1girl` пусто, хотя тег есть с count=307) — их баг, остальные теги работают; yande.re вычистил теги `1girl`/`girl` из корпуса (пусто и в tag.json); mspabooru жив, но корпуса тегов гомстаковские (`1girl` → 0); XML у paheal в одинарных кавычках, у tbib — в двойных (парсер xmlAttrs ест оба).
 
 **Не добавлены (проверено 2026-10-10):** e926 — 403 на egress Telegram (с прокси работает); hypnohub — dapi отдаёт 0 на любой тег после переезда движка; twibooru — сайт жив, API закрыт (все /api/* → 404); rule34hentai.net — 403 Cloudflare с любых наших IP; sankaku — токен из booru_tokens.json истёк + capi-v2 банит IP прокси (нужен свежий логин браузером).
 
-**Обход всех оставшихся кандидатов (вечер 2026-10-10, локально через прокси 3990 + пробы из облака через endpoints/dev `probeFetch`): добавить нечего.**
+**Обход всех оставшихся кандидатов (вечер 2026-10-10, локально через прокси 25916/3990 + пробы из облака (tgcloud run)): добавить нечего.**
 
 | Кандидат | Вердикт |
 |---|---|
 | anime-pictures.net | API v3 жив, теги с пробелами (`long hair`), превью `_sp.png` хотлинкается — но **оригиналы** (`oimages.anime-pictures.net/<md5[:3]>/<file_url из детального запроса>`) редиректят на главную без своей сессии — хотлинк-гейт, для инлайна мёртв |
-| zerochan.net | JS-челлендж «Checking browser…» (503 при браузерном UA из облака, HTML без json при ботовом) — как ATFbooru |
+| zerochan.net | JS-челлендж «Checking browser…» **привязан к IP**: свежие куки с решённым в браузере челленджем (клиренс-кука `xbotcheck`, снята через 37777) проходят локально через прокси, но из облака TG-egress всё равно 503 — у egress пул IP, челлендж не решить. Куки в keys.js (`zerochan`) остаются про запас |
 | realbooru.com | dapi отвечает: «API offline… shut off indefinitely» |
-| sankaku.app / capi-v2 | аноним 403 из облака TG-egress тоже; в куках booru_tokens.json есть access_token — возможен вариант с `Authorization: Bearer` из облака (скрипт `_sankaku_keys.py` пишет его в keys.js; запуск вручную — DLP не пускает агента к файлу токенов) |
+| sankaku | **IP-блок, а не авторизация**: даже с полной сессией из booru_tokens.json (Bearer из cookie access_token + все 10 кук, экспортёр `_sk_export.js` → keys.js) capi-v2 из облака отвечает голым nginx-403 — sankaku режет датацентровые диапазоны целиком, TG-egress непроходим в принципе |
 | rule34.xyz, rule34vault.com, yiffverse.com | тот же движок `POST /api/v2/post/search/root` + CDN семейства `r34xyz.b-cdn.net` — копии rule34.world |
 | rule34.gg | свой SPA (`new-api.rule34.gg` в токенах), открытого API не найдено; rule34.porn — HTML-туба |
 | firebooru.com | мёртв (502 локально, fetch fail из облака) |
@@ -165,3 +165,33 @@ AI-контент не индексируется (владелец, 2026-10-10)
 - **Статус аккаунтов (2026-10-09, ночь)**: в `booru_tokens.json` готовые ключи/сессии: **danbooru** (ключ `ryle35`), **pixiv** (PHPSESSID после входа через Google), **furaffinity** (аккаунт создан, куки a/b), **sankaku** (токен), плюс из BotGG: **aibooru**, **ponerpics**, **rule34.xxx**, **rule34.porn**, **rule34.gg**, **civitai**, **deviantart**. **e621**: аккаунт создан, ждёт письма-подтверждения. **e-hentai**: форма регистрации заполнена, ждёт капчу reg_code от владельца. **gelbooru/wallhaven** — регистрации закрыты на сервере.
 - **Что уже полезно в файле**: `cf_clearance` для rule34.xxx, konachan.com и pixiv — работает как обход Cloudflare при совпадении IP (прокси) и User-Agent с браузером.
 - **Начальный набор для бота**: danbooru + gelbooru + rule34.xxx + konachan + yande.re + e621 + safebooru — покрывают 90% артов, у всех простой JSON-ответ без капч. Анонимно API работают у danbooru, rule34.xxx, safebooru.org, konachan, yande.re, e621 (с ключами — выше лимиты и избранное).
+
+---
+
+## 11. Расширение 2026-10-20 — галереи, арт-платформы, агрегаторы (+6 сайтов, всего 27)
+
+Добавлены после проверки на **хотлинк без Referer** (жёсткое условие инлайна: Telegram тянет `file_url` серверно, без заголовка Referer). Порядок вердиктов — сверка живыми запросами (UA `Ryle35InlineBot/1.0`), не по документации.
+
+### Добавлено (fmt в `endpoints/crawl.js`)
+
+| Сайт | fmt | cd | Что и как | Ключ/сессия |
+|---|---|---|---|---|
+| **nhentai** `nhentai.net` | `nhentai` | 120 | v2-API. Старый `/api/galleries/search` теперь 403 «Use new API». `/api/v2/search?query=&page=` (аноним 10/мин) — листинг без `fileUrl`, только `media_id` и путь превью `galleries/<mid>/thumb[.<orig>].webp`; страница-1 = `1.<orig>` (thumb.jpg.webp → 1.jpg, thumb.webp → 1.webp — сверено). Зеркала i1..i4/t1..t4 равнозначны. Теги: `tag_ids` → один `/api/v2/tags/ids`. Теги — слова через пробел (подчёркивания → 0). Хотлинк 200 image/webp. | нет |
+| **e-hentai** `e-hentai.org` | `ehentai` | 600 | У `api.php` только `gdata` (method=search нет). Поиск — HTML `/?f_search=`, пагинация курсором `next=<gid>`. Пары gid/token из выдачи → один POST `gdata` (≤25 gid) → метаданные/теги/обложка. `fileUrl` = обложка `ehgt.org` (стабильная, хотлинк 200 image/webp). **Ссылку на полную страницу не строим**: её URL живёт с `keystamp` и нестандартным портом `hath.network` и протухает. Теги с неймспейсом (language:/artist:/) — срезаем префикс. | нет (ExHentai — куки, не берём) |
+| **itaku** `itaku.ee` | `itaku` | 300 | DRF cursor-пагинация; `limit`/`page` API игнорит (всегда 15), реальный фильтр — `required_tags` (AND, повторяемый), а `tags=` молча игнорится. Один пост = несколько `gallery_images` → строка на файл. Статика → `image_xl` (≤4.2 МБ), анимация → `image` (image_xl битый). Хотлинк 200 image/png. | нет |
+| **scrolller** `scrolller.com` | `scrolller` | 900 | Живой GraphQL-путь — `POST https://api.scrolller.com/admin` (`/graphql` → 301). Тег → `searchSubreddits` → 4 саба → `getSubreddit`. Медиа: `mediaSources[]`; JPEG (images.scrolller.com) / MP4 (octa.scrolller.com). Хотлинк 200 без Referer. Боорного тега нет — маппинг на имя сабреддита. | нет |
+| **FurAffinity** `furaffinity.net` | `furaffinity` | 900 | API нет — HTML-поиск (`<figure id="sid-<id>">`, `data-tags`). Файлы/превью `t./d.furaffinity.net` — 200 без Referer и без кук. perpage ≤48. Анонимно — general/questionable, adult скрыт. | не нужны |
+| **DeviantArt** `deviantart.com` | `deviantart` | 900 | OAuth2 app-токен (client_credentials, 1 ч, кэш в модуле). `/browse/tags?tag=` принимает **ровно один** тег (мульти → 400). `content.src` — подписанный CDN-URL, хотлинк 200 без Referer (без токена 401). | `keys.js → deviantart` |
+
+### Отклонено (проверено живьём)
+
+| Сайт | Причина |
+|---|---|
+| **pixiv.net** | Картинки только на `i.pximg.net`, который требует `Referer: https://www.pixiv.net/` (без него 403, с ним 200). Инлайн ТГ шлёт без Referer ⇒ мёртв. Поиск работает, но ссылки ведут на тот же CDN. |
+| **hitomi.la** | То же — CDN отдаёт файл только с `Referer: https://hitomi.la/` (без него 404). Основной домен `ltn.hitomi.la` не резолвится; рабочий двойник `ltn.gold-usergeneratedcontent.net`. Поиск (nozomi) жив, но картинки для инлайна недоступны. |
+| **kemono.cr / coomer.st** | API и превью (`img.kemono.cr`) живут, но `fileUrl` ведёт на `n1-n4.kemono.cr` (общий кластер, 91.149.227.10-13) — ни одного открытого TCP-порта, connect timeout из всех проверенных сетей (direct, прокси, SOCKS, 6 стран). Хотлинк не пройден. |
+| **artstation.com** | API и хотлинк 200, но выдача — только `smaller_square_cover_url` 400×400, **тегов в ответе нет** ⇒ AI-контент (ArtStation завален им) отсечь нечем — нарушает правило владельца «AI не индексировать». |
+| **inkbunny.net** | Официальный API требует логин/пароль, кред в репозитории нет, гостевого режима нет. |
+| **zerochan.net** | CDN хотлинкается (200 image/jpeg), `json=1` отдаёт items даже без кук, но JS-челлендж «Checking browser…» привязан к IP и режет датацентровые диапазоны TG-egress (503). |
+
+**Уроки:** (1) для инлайна критичен только один тест — `curl` на `file_url` без Referer: 200 + image/video + size>0; всё остальное вторично. (2) У gallery-сайтов (nhentai/e-hentai) листинг не даёт `fileUrl` — надо собирать из `media_id`/обложки, а полные URL с `keystamp` в БД не класть (протухают). (3) `tags=` у itaku и `perpage`/мульти-тег у DA/FA — тихие no-op'ы: проверять negative control (nonsense-тег должен давать пусто).
