@@ -24,3 +24,9 @@ docs/local-setup.md
 __pycache__/
 .zcode/
 .zcodeignore
+tgcloud/lib/aikeys.js
+_index/
+_index_build/
+_pump_*
+_r34w_*
+_sess_export.js

@@ -11,7 +11,7 @@ It runs entirely on [Telegram's serverless bot platform](https://core.telegram.o
 ## What it does
 
 - **Inline everywhere:** works in any private chat, group, or channel through Telegram's inline mode. Multi-tag AND queries, pagination, `cache_time` to keep repeat queries cheap.
-- **21 boards, 9 engines:** danbooru, gelbooru, rule34.xxx, e621, konachan, yande.re, wallhaven, rule34.world, the philomena family (derpibooru, furbooru, ponerpics, …) and more. One small adapter per engine, all in `endpoints/crawl.js`.
+- **27 boards, 15 engines:** danbooru, gelbooru, rule34.xxx, e621, konachan, yande.re, wallhaven, rule34.world, the philomena family (derpibooru, furbooru, ponerpics, …), gallery sources (nhentai, e-hentai), art platforms (itaku, furaffinity, deviantart) and the scrolller reddit aggregator. One small adapter per engine, all in `endpoints/crawl.js`.
 - **Typo-tolerant search:** query tags are corrected against each board's autocomplete API (prefix candidates, weighted votes) before the search runs. Multi-word queries get glued into real tags: `long hair` → `long_hair`, `2 girls` → `2girls`.
 - **Video that survives Telegram:** external media in inline results is capped at 1 MB (gif) / 20 MB (video), and board URLs rot. A background job pre-downloads mp4s into a private owner channel, where Telegram issues a permanent `file_id`; cached videos are served first and outlive URL rot.
 - **A queue that grows where users look:** searches seed the crawl queue with demand-weighted priority, capped at one tick per 10 minutes to stay inside platform limits.

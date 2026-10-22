@@ -152,3 +152,27 @@ The platform manages the bot's webhook for you, derived from your deployed
 `handlers/*`, and refreshes it on `push`. If it ever drifts — e.g. someone called
 `setWebhook` with the raw bot token — `npx tgcloud webhook` shows the mismatch and
 `npx tgcloud webhook sync` repairs it.
+
+## Semantic index delta (tag_vec)
+
+`tag_vec` is built by `_index_build/build_index.py` against the cloud endpoint
+`tgcloud/endpoints/zz_seed_vec.js`. The build is idempotent and incremental:
+it embeds only tags missing from the local journal `_index/tag_vec.jsonl`
+(one line per tag) and appends successful ones there.
+
+Delta refresh after crawls (run by hand, no Windows autostart — owner's rule):
+
+```
+_index_build\delta.cmd 400        # refresh vocab + embed up to 400 new tags
+_index_build\delta.cmd 99999      # everything new
+python _index_build\build_index.py --vocab-only    # just refresh _index\vocab.json
+```
+
+- `--refresh-vocab` pages tag frequencies from `post_tags` (`mode:'vocab'` in
+  zz_seed_vec) into `_index\vocab.json` (~90 s for ~55k tags; page size halves
+  automatically on `rows_read` quota, popular ranges need ≤1000/page).
+- Canonical vocab is `_index\vocab.json` (scratch copy is legacy — scratch is
+  pruned after 24 h idle). Fresh counts also correct `n` of existing tags on
+  the next full reindex; delta runs only add missing tags.
+- Changing `EMBED_MODEL` / `INDEX_TEXT_FORMAT` in `lib/embed.js` still means a
+  full rebuild.
