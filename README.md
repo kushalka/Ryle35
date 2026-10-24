@@ -60,7 +60,7 @@ export const rule34xxx = { apiKey: '...' };
 export const wallhaven = { apiKey: '...' };
 ```
 
-4. `tgcloud/lib/config.js` holds the ID of a private channel where the bot parks mp4 files to collect `file_id`s. Make your own channel, add the bot as admin, put its chat ID there.
+4. `tgcloud/lib/keys.js` also exports `DUMP_CHAT_ID` — the ID of a private channel where the bot parks mp4 files to collect `file_id`s. Make your own channel, add the bot as admin, put its chat ID next to your board keys.
 5. The Russian-query layer needs two extra pieces: `tgcloud/lib/aikeys.js` (gitignored) with an OpenRouter key, and a `tag_vec` index — tag embeddings built by `endpoints/zz_seed_vec.js`. Without it the bot still works: queries just fall back to the lexicon.
 
 Board-by-board research (API shapes, rate limits, Cloudflare traps, dead ends): [booru-sites.md](booru-sites.md). Platform reference: [docs/telegram-serverless.md](docs/telegram-serverless.md) and [docs/tgcloud-sdk.md](docs/tgcloud-sdk.md).

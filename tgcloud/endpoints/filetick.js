@@ -1,5 +1,5 @@
 // endpoints/filetick.js — видеокачвейер: самые популярные mp4 без file_id качаем
-// в облаке и льём в канал-дамп (lib/config.js), ТГ возвращает вечный file_id —
+// в облаке и льём в канал-дамп (id в gitignored lib/keys.js), ТГ возвращает вечный file_id —
 // дальше выдача из кэша ТГ без лимитов URL (1 МБ у mpeg4_gif / 20 МБ у video).
 // Лимиты Bot API (core.telegram.org/bots/faq): ≤1 сообщения/сек в чат, ~20/мин на
 // группу/канал, загрузка ≤50 МБ. Наш темп: ≤8 файлов за вызов, вызов раз в 30 с —
@@ -8,7 +8,7 @@
 
 import { db, api, fetch, InputFile, BotApiError } from 'sdk';
 import { claimTick } from '../lib/queue.js';
-import { DUMP_CHAT_ID } from '../lib/config.js';
+import { DUMP_CHAT_ID } from '../lib/keys.js';
 
 const INTERVAL_SEC = 30;   // между файловыми подходами
 const MAX_FILES = 8;       // за подход — потолок ~16/мин при канальном лимите ~20/мин
