@@ -11,6 +11,9 @@ booru_tokens.json
 .cred-server.js
 proxy-preload.cjs
 _fill_db.*
+_fill.sh
+_fill.log
+_bridge.log
 _getkeys.py
 _makekeys.py
 _sankaku_keys.py
